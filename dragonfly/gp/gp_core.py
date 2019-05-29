@@ -29,20 +29,32 @@ from ..utils.reporters import get_reporter
 
 # These are mandatory requirements. Every GP implementation should probably use them.
 mandatory_gp_args = [ \
+  # Parameters for hyperparameter fitting in the GP --------------------------------------
   get_option_specs('hp_tune_criterion', False, 'ml',
                    'Which criterion to use when tuning hyper-parameters. Other ' +
                    'options are post_sampling and post_mean.'),
   get_option_specs('hp_tune_probs', False, 'uniform', \
-    'With what probability should we choose each strategy given in hp_tune_criterion.' + \
-    'If "uniform" we we will use uniform probabilities and if "adaptive" we will use ' + \
-    'adaptive probabilities which weight acquisitions according to how well they do.'),
+                   ('With what probability should we choose each strategy given in ' +
+                    'hp_tune_criterion. If "uniform" we we will use uniform ' +
+                    'probabilities and if "adaptive" we will use adaptive probabilities' +
+                    ' which weight acquisitions according to how well they do.')),
+  # Maximum Likelihood
   get_option_specs('ml_hp_tune_opt', False, 'default',
                    'Which optimiser to use when maximising the tuning criterion.'),
   get_option_specs('hp_tune_max_evals', False, -1,
                    'How many evaluations to use when maximising the tuning criterion.'),
   get_option_specs('handle_non_psd_kernels', False, 'guaranteed_psd',
                    'How to handle kernels that are non-psd.'),
-  # The mean and noise variance of the GP
+  # Posterior sampling
+  get_option_specs('post_hp_tune_method', False, 'slice',
+                   'Which sampling to use when maximising the tuning criterion. Other ' +
+                   'option is nuts.'),
+  get_option_specs('post_hp_tune_burn', False, -1,
+                   'How many initial samples to ignore during sampling.'),
+  get_option_specs('post_hp_tune_offset', False, 25,
+                   'How many samples to ignore between samples.'), \
+  # GP parameters that may be specified --------------------------------------------------
+  # GP mean
   get_option_specs('mean_func', False, None,
                    ('The mean function. If not None, will use this instead of the' +
                     'other options below')),
@@ -51,20 +63,21 @@ mandatory_gp_args = [ \
                     'zero, or tune. If const, specifcy value in mean-func-const.')),
   get_option_specs('mean_func_const', False, 0.0,
                    'The constant value to use if mean_func_type is const.'),
+  # GP kernel
+  get_option_specs('kernel_func', False, None,
+                   ('The kernel function. If not None, will use this instead of the' +
+                    'default kernel options for the domain.')),
+  get_option_specs('kernel_func_hyperparam_configs', False, None,
+                   'Configurations for the kernel hyperparameters.'),
+  # GP noise variance
   get_option_specs('noise_var_type', False, 'tune', \
-    ('Specify how to obtain the noise variance. Should be tune, label or value. ' \
-     'Specify appropriate value in noise_var_label or noise_var_value')),
+                   ('Specify how to obtain the noise variance. Should be tune, label or' +
+                    ' value. Specify appropriate value in noise_var_label or ' +
+                    'noise_var_value')),
   get_option_specs('noise_var_label', False, 0.05,
                    'The fraction of label variance to use as noise variance.'),
   get_option_specs('noise_var_value', False, 0.1,
                    'The (absolute) value to use as noise variance.'),
-  get_option_specs('post_hp_tune_method', False, 'slice',
-                   'Which sampling to use when maximising the tuning criterion. Other ' +
-                   'option is nuts.'),
-  get_option_specs('post_hp_tune_burn', False, -1,
-                   'How many initial samples to ignore during sampling.'),
-  get_option_specs('post_hp_tune_offset', False, 25,
-                   'How many samples to ignore between samples.'), \
   ]
 
 
@@ -339,7 +352,7 @@ class GPFitter(object):
     self._set_up_mean_and_noise_variance_bounds()
     # Set up hyper-parameters for the child.
     # -----------------------------------------------------------------------------
-    self._child_set_up()
+    self._child_set_up_kernel()
     self._hp_tune_method_set_up()
     self.cts_hp_bounds = np.array(self.cts_hp_bounds)
     # Some post child set up
@@ -415,10 +428,29 @@ class GPFitter(object):
       self.cts_hp_bounds.append(self.noise_var_log_bounds)
       self.param_order.append(["noise_var", "cts"])
 
-  def _child_set_up(self):
-    """ Here you should set up parameters for the child, such as the bounds for the
-        optimiser etc. """
-    raise NotImplementedError('Implement _child_set_up in a child method.')
+  def _set_up_kernel(self):
+    """ Set up kernel parameters. """
+    if hasattr(self.options, 'kernel_func') and self.options.kernel_func is not None:
+      kf_hp_configs = [] if self.options.kernel_func_hyperparam_configs is None \
+                      else self.options.kernel_func_hyperparam_configs
+      for hpc in kf_hp_configs:
+        if hpc[1] in ['cts', 'continuous', 'float', 'euclidean']:
+          self.param_order.append([hpc[0], 'cts'])
+          self.cts_hp_bounds.append(hpc[2])
+        elif hpc[2] in ['dscr', 'discrete']:
+          self.param_order.append([hpc[0], 'dscr'])
+          self.dscr_hp_vals.append(hpc[2])
+        else:
+          raise ValueError('Unrecognised option %s for parameter type. Please specify ' +
+                           'one of {cts, continuous, float, euclidean} for continuous ' +
+                           'kernel parameters and one of {dscr, discrete} for discrete' +
+                           ' parameters')
+    else:
+      self._child_set_up_kernel()
+
+  def _child_set_up_kernel(self):
+    """ Here you should set up parameters for the child kernel. """
+    raise NotImplementedError('Implement _child_set_up_kernel in a child method.')
 
   def _set_up_ml_hp_tune(self):
     """ Sets up optimiser for ml hp tune. """
@@ -823,7 +855,7 @@ class GPFitter(object):
       # GPFitter class ends here ---------------------------------------------------------
 
 
-# Some utilities we will be using above -------------------------------------------------
+# Some utilities we will be using above --------------------------------------------------
 def _get_cholesky_decomp(K_trtr_wo_noise, noise_var, handle_non_psd_kernels):
   """ Computes cholesky decomposition after checking how to handle non-psd kernels. """
   if handle_non_psd_kernels == 'try_before_project':

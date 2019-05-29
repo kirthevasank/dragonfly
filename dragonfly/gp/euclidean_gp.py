@@ -213,7 +213,7 @@ class EuclideanGPFitter(gp_core.GPFitter):
     options = load_options(euclidean_gp_args, partial_options=options)
     super(EuclideanGPFitter, self).__init__(X, Y, options, reporter)
 
-  def _child_set_up(self):
+  def _child_set_up_kernel(self):
     """ Sets parameters for GPFitter. """
     # IMPORTANT: Keep this order when tuning for the hyper-parameters.
     # Continuous: Mean value, GP noise, kernel scale, then the remaining Kernel params.
@@ -430,7 +430,7 @@ class EuclideanMFGPFitter(mf_gp.MFGPFitter):
 
   # Child set up Methods
   # ===================================================================================
-  def _child_set_up(self):
+  def _child_set_up_kernel(self):
     """ Sets parameters fro GPFitter. """
     # pylint: disable=too-many-branches
     # Check args - so that we don't have to keep doing this all the time

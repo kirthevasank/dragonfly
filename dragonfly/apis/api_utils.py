@@ -335,7 +335,8 @@ def preprocess_options_for_gp_bandits(options, config, prob, converted_cp_to_euc
                       [map_to_bounds(zx2[0], config.fidel_space.bounds),
                        map_to_bounds(zx2[1], _config.domain.bounds)],
                       *argszx, **kwargszx)
-    elif (not is_mf) and _config.get_type() == 'euclidean' and converted_cp_to_euclidean:
+    elif (not is_mf) and _config.domain.get_type() == 'euclidean' and \
+         converted_cp_to_euclidean:
       ret = lambda xx1, xx2, *argsxx, **kwargsxx: \
                 ret_1(map_to_bounds(xx1, _config.domain.bounds),
                       map_to_bounds(xx2, _config.domain.bounds),
@@ -382,12 +383,15 @@ def preprocess_options_for_gp_bandits(options, config, prob, converted_cp_to_euc
                                config, prob, converted_cp_to_euclidean)
   # 2. A custom kernel for single objective ==============================================
   if hasattr(options, 'gp_prior_kernel') and \
-     options.gpb_prior_kernel_unproc is not None:
+     options.gp_prior_kernel is not None:
     prior_kernel_given = options.gpb_prior_kernel \
                          if hasattr(options, 'gpb_prior_kernel') \
                          else None
     options.gpb_prior_kernel = _get_gpb_prior_kernel_from_unproc(options.gp_prior_kernel,
         prior_kernel_given, config, prob, converted_cp_to_euclidean)
+  if hasattr(options, 'gp_prior_kernel_hyperparams') and \
+    options.gp_prior_kernel_hyperparams is not None:
+    options.gpb_prior_kernel_hyperparams = options.gp_prior_kernel_hyperparams
   # 3. Prior mean for multi-objective ====================================================
   if hasattr(options, 'gps_prior_means') and \
     options.gps_prior_means is not None:
@@ -414,6 +418,9 @@ def preprocess_options_for_gp_bandits(options, config, prob, converted_cp_to_euc
     options.moo_gpb_prior_kernels = _get_gpb_prior_kernel_from_unproc(
         options.gps_prior_kernels, moo_prior_kernels_given, config, prob,
         converted_cp_to_euclidean)
+  if hasattr(options, 'gps_prior_kernels_hyperparams') and \
+    options.gps_prior_kernels_hyperparams is not None:
+    options.moo_gpb_prior_kernels_hyperparams = options.gps_prior_kernels_hyperparams
   # Return options =======================================================================
   return options
 

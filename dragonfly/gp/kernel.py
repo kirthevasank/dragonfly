@@ -756,3 +756,61 @@ def _compute_raised_scaled_sum(dist_arrays, betas, powers):
     sum_of_dists += betas[idx] * raised_curr_dists
   return sum_of_dists
 
+
+# A class for customised kernels ---------------------------------------------------------
+class SpecifiedKernel(Kernel):
+  """ A user specified kernel. """
+
+  def __init__(self, kernel_func, kernel_func_hyperparams, is_guaranteed_psd=True,
+               kernel_func_is_vectorised=False):
+    """ Constructor.
+      kernel_func is the function which is used to evaluate the kernel.
+      It takes in at least two hyperparameters and optionally a third for the
+      hyperparameters.
+    """
+    super(SpecifiedKernel, self).__init__()
+    self.kernel_func = kernel_func
+    self.kernel_func_hyperparams = kernel_func_hyperparams
+    self._is_guaranteed_psd = is_guaranteed_psd
+    self.kernel_func_is_vectorised = kernel_func_is_vectorised
+    # Check number of parameters
+    from inspect import signature
+    sig = signature(kernel_func)
+    self.num_args_for_kernel_func = len(sig.parameters)
+    if self.num_args_for_kernel_func == 2:
+      self.kernel_func_to_pass = self.kernel_func
+    elif self.num_args_for_kernel_func == 3:
+      self.kernel_func_to_pass = lambda x1, x2: self.kernel_func(x1, x2,
+                                     self.kernel_func_hyperparams)
+    else:
+      raise ValueError('Number of arguments for kernel_func should be 2 or 3. Given %d.'%(
+                       self.num_args_for_kernel_func))
+
+  def is_guaranteed_psd(self):
+    """ The child class should implement this method to indicate whether it is
+        guaranteed to be PSD. """
+    return self._is_guaranteed_psd
+
+  def _child_evaluate(self, X1, X2):
+    """ Evaluate child. """
+    if self.kernel_func_is_vectorised:
+      return self.kernel_func_to_pass(X1, X2)
+    else:
+      n1 = len(X1)
+      n2 = len(X2)
+      ret = np.zeros((n1, n2))
+      X1_is_X2 = X1 is X2
+      for i, x1 in enumerate(X1):
+        X2_idxs = range(i, n2) if X1_is_X2 else range(n2)
+        for j in X2_idxs:
+          x2 = X2[j]
+          ret[i, j] = self.kernel_func_to_pass(x1, x2)
+          if X1_is_X2:
+            ret[j, i] = ret[i, j]
+      return ret
+
+  def __str__(self):
+    """ Return string representation. """
+    return 'UserSpecifiedKernel %s with hyperparams: %s.'%(
+           str(self.kernel_func), self.kernel_func_hyperparams)
+

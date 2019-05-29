@@ -365,7 +365,7 @@ class CPGPFitter(gp_core.GPFitter):
     # Call super constructor
     super(CPGPFitter, self).__init__(X, Y, options, reporter)
 
-  def _child_set_up(self):
+  def _child_set_up_kernel(self):
     """ Set up parameters for the CPGPFitter. """
     # Set up for the kernel scale
     self.param_order.append(['kernel_scale', 'cts'])
@@ -460,7 +460,7 @@ class CPMFGPFitter(mf_gp.MFGPFitter):
     super(CPMFGPFitter, self).__init__(ZZ, XX, YY, options, reporter)
 
   # Child set up
-  def _child_set_up(self):
+  def _child_set_up_kernel(self):
     """ Sets parameters for the GPFitter. """
     self.param_order.append(['kernel_scale', 'cts'])
     self.kernel_scale_log_bounds = [np.log(0.03 * self.Y_var), np.log(30 * self.Y_var)]

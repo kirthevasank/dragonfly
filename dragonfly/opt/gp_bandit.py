@@ -68,9 +68,13 @@ gp_bandit_args = [ \
   # For multi-fidelity BO
   get_option_specs('mf_strategy', False, 'boca',
                    'Which multi-fidelity strategy to use. Should be one of {boca}.'),
-  # Mean of the GP
+  # GP Prior parameters
   get_option_specs('gpb_prior_mean', False, None,
                    'The prior mean of the GP for the model.'),
+  get_option_specs('gpb_prior_kernel', False, None,
+                   'The prior kernel of the GP for the model.'),
+  get_option_specs('gpb_prior_kernel_hyperparams', False, None,
+                   'The hyperparameters of the GP prior kernel for the model.'),
   # The following are perhaps not so important. Some have not been implemented yet.
   get_option_specs('shrink_kernel_with_time', False, 0,
                    'If True, shrinks the kernel with time so that we don\'t get stuck.'),
@@ -398,6 +402,7 @@ class GPBandit(BlackboxOptimiser):
     # pylint: disable=unused-argument
     gpf_options = Namespace(**vars(self.options))
     gpf_options.mean_func = gpf_options.gpb_prior_mean
+    # TODO!
     return gpf_options
 
   def _build_new_gp(self):

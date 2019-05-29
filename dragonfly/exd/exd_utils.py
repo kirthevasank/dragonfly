@@ -356,28 +356,34 @@ def preprocess_loaded_data_for_domain(loaded_data, experiment_caller):
   """ Preprocesses loaded data. """
   if hasattr(experiment_caller, 'config') and experiment_caller.config is not None:
     config = experiment_caller.config
-    if ('config_points' in loaded_data) and (not 'points' in loaded_data):
+    if (('config_fidels' in loaded_data) and ('config_points' in loaded_data)) and \
+       ((not 'points' in loaded_data) and (not 'fidels' in loaded_data)):
+      fidel_points = [get_processed_from_raw_via_config(cpt, config) for cpt in
+                      zip(loaded_data['config_fidels'], loaded_data['config_points'])]
+      loaded_data['fidels'] = [elem[0] for elem in fidel_points]
+      loaded_data['points'] = [elem[1] for elem in fidel_points]
+    elif ('config_points' in loaded_data) and (not 'points' in loaded_data):
       loaded_data['points'] = [get_processed_from_raw_via_config(cpt, config) for cpt in
                                loaded_data['config_points']]
-    if ('config_fidels' in loaded_data) and (not 'fidels' in loaded_data):
-      loaded_data['fidels'] = [get_processed_from_raw_via_config(cf, config) for cf in
-                               loaded_data['config_fidels']]
   return loaded_data
 
 def postprocess_data_to_save_for_domain(data_to_save, experiment_caller):
   """ Post process loaded data. """
+  # pylint: disable=bare-except
   if hasattr(experiment_caller, 'config') and experiment_caller.config is not None:
     config = experiment_caller.config
-    if 'points' in data_to_save:
+    if ('fidels' in data_to_save) and ('points' in data_to_save):
+      try:
+        config_fidel_points = [get_raw_from_processed_via_config(rpt, config) for rpt in
+                               zip(data_to_save['fidels'], data_to_save['points'])]
+        data_to_save['config_fidels'] = [elem[0] for elem in config_fidel_points]
+        data_to_save['config_points'] = [elem[1] for elem in config_fidel_points]
+      except:
+        pass
+    elif 'points' in data_to_save:
       try:
         data_to_save['config_points'] = [get_raw_from_processed_via_config(pt, config)
                                         for pt in data_to_save['points']]
-      except:
-        pass
-    if 'fidels' in data_to_save:
-      try:
-        data_to_save['config_fidels'] = [get_raw_from_processed_via_config(fidel, config)
-                                        for pt in data_to_save['fidels']]
       except:
         pass
   return data_to_save

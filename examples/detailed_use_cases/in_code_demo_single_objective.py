@@ -10,8 +10,8 @@ from dragonfly import load_config_file, maximise_function, maximise_multifidelit
 import obj_3d
 import obj_3d_mf
 import obj_5d
-from prior_means import conductivity_prior_mean_3d, conductivity_prior_mean_5d, \
-                        conductivity_prior_mean_3d_mf
+from gp_prior_info import conductivity_prior_mean_3d, conductivity_prior_mean_5d, \
+                          conductivity_prior_mean_3d_mf
 
 
 # choose problem

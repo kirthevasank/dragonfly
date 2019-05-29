@@ -13,7 +13,8 @@ import numpy as np
 # Local imports
 from ..exd.cp_domain_utils import load_config_file, \
                                 get_processed_func_from_raw_func_for_cp_domain_fidelity, \
-                                get_processed_func_from_raw_func_for_cp_domain
+                                get_processed_func_from_raw_func_for_cp_domain, \
+                                get_processed_from_raw_via_config
 from ..exd.domains import EuclideanDomain
 from ..exd.worker_manager import MultiProcessingWorkerManager, SyntheticWorkerManager, \
                                  AbstractWorkerManager
@@ -267,7 +268,10 @@ def preprocess_options_for_gp_bandits(options, config, prob, converted_cp_to_euc
   # pylint: disable=too-many-branches
   # pylint: disable=too-many-locals
   options = Namespace(**vars(options)) # Make a new copy
-  # We will call this internal function repeatedly below =================================
+
+  # The following internal function is used to convert an unprocessed mean function
+  # to a processed kernel function. We will call it repeatedly below.
+  # ------------------------------------------------------------------------------------
   def _get_gpb_prior_mean_from_unproc(prior_mean_unproc_given, prior_mean_given,
         config, prob, converted_cp_to_euclidean):
     """ Return the prior mean for a single point from arguments. """
@@ -313,6 +317,62 @@ def preprocess_options_for_gp_bandits(options, config, prob, converted_cp_to_euc
       raise ValueError('Unrecognised problem type (prob): %s.'%(prob))
     return gpb_prior_mean
 
+  # The following internal functions are used to convert an unprocessed kernel function
+  # to a processed kernel function. We will call it repeatedly below.
+  # ------------------------------------------------------------------------------------
+  def _get_proc_kernel_from_config(_unproc_kernel, _config, _converted_cp_to_euclidean,
+                                   is_mf):
+    """ Return the processed kernel from config. """
+    ret_1 = lambda x1, x2, *args, **kwargs: \
+                _unproc_kernel(get_processed_from_raw_via_config(x1, config),
+                               get_processed_from_raw_via_config(x2, config),
+                               *args, **kwargs)
+    if is_mf and _config.domain.get_type() == 'euclidean' and \
+       _config.fidel_space.get_type() == 'euclidean' and _converted_cp_to_euclidean:
+      ret = lambda zx1, zx2, *argszx, **kwargszx: \
+                ret_1([map_to_bounds(zx1[0], config.fidel_space.bounds),
+                       map_to_bounds(zx1[1], _config.domain.bounds)],
+                      [map_to_bounds(zx2[0], config.fidel_space.bounds),
+                       map_to_bounds(zx2[1], _config.domain.bounds)],
+                      *argszx, **kwargszx)
+    elif (not is_mf) and _config.get_type() == 'euclidean' and converted_cp_to_euclidean:
+      ret = lambda xx1, xx2, *argsxx, **kwargsxx: \
+                ret_1(map_to_bounds(xx1, _config.domain.bounds),
+                      map_to_bounds(xx2, _config.domain.bounds),
+                      *argsxx, **kwargsxx)
+    else:
+      ret = ret_1
+    return ret
+  # The following calls the above function depending on context
+  def _get_gpb_prior_kernel_from_unproc(prior_kernel_unproc_given, prior_kernel_given,
+        config, prob, converted_cp_to_euclidean):
+    """ Return the prior kernel for a single point from arguments. """
+    if prior_kernel_given is not None:
+      gpb_prior_kernel = prior_kernel_given # If the processed version is given, use that.
+    elif prior_kernel_unproc_given is None:
+      gpb_prior_kernel = None
+    elif prob in ['opt', 'mfopt']:
+      if config.domain.get_type() == 'euclidean' and not converted_cp_to_euclidean:
+        # In this case, both the processed and unprocessed versions are the same!
+        gpb_prior_kernel = prior_kernel_unproc_given
+      else:
+        is_mf = (prob == 'mfopt')
+        gpb_prior_kernel = _get_proc_kernel_from_config(prior_kernel_unproc_given,
+                                      config, converted_cp_to_euclidean, is_mf)
+    elif prob in ['moo', 'mfmoo']:
+      if config.fidel_space.get_type() == 'euclidean' \
+        and config.domain.get_type() == 'euclidean' and not converted_cp_to_euclidean:
+        # In this case, both the processed and unprocessed versions are the same!
+        gpb_prior_kernel = prior_kernel_unproc_given
+      else:
+        is_mf = (prob == 'mfmoo')
+        gpb_prior_kernel = [_get_proc_kernel_from_config(kern, config,
+                                                         converted_cp_to_euclidean, is_mf)
+                            for kern in prior_kernel_unproc_given]
+    else:
+      raise ValueError('Unrecognised problem type (prob): %s.'%(prob))
+    return gpb_prior_kernel
+
   # 1. Prior mean for single objective ===================================================
   if hasattr(options, 'gp_prior_mean'):
     prior_mean_given = options.gpb_prior_mean if hasattr(options, 'gpb_prior_mean') \
@@ -321,9 +381,13 @@ def preprocess_options_for_gp_bandits(options, config, prob, converted_cp_to_euc
                                options.gp_prior_mean, prior_mean_given,
                                config, prob, converted_cp_to_euclidean)
   # 2. A custom kernel for single objective ==============================================
-  if hasattr(options, 'gpb_prior_kernel_unproc') and \
+  if hasattr(options, 'gp_prior_kernel') and \
      options.gpb_prior_kernel_unproc is not None:
-    raise NotImplementedError('Not Implemented custom kernels yet!')
+    prior_kernel_given = options.gpb_prior_kernel \
+                         if hasattr(options, 'gpb_prior_kernel') \
+                         else None
+    options.gpb_prior_kernel = _get_gpb_prior_kernel_from_unproc(options.gp_prior_kernel,
+        prior_kernel_given, config, prob, converted_cp_to_euclidean)
   # 3. Prior mean for multi-objective ====================================================
   if hasattr(options, 'gps_prior_means') and \
     options.gps_prior_means is not None:
@@ -341,9 +405,15 @@ def preprocess_options_for_gp_bandits(options, config, prob, converted_cp_to_euc
         _get_gpb_prior_mean_from_unproc(prior_mean_unproc_given, prior_mean_given,
                                         config, prob, converted_cp_to_euclidean))
   # 4. Custom kernel for multi objective =================================================
-  if hasattr(options, 'moo_gpb_prior_kernels_unproc') and \
-     options.moo_gpb_prior_kernels_unproc is not None:
-    raise NotImplementedError('Not Implemented custom kernels yet!')
+  if hasattr(options, 'gps_prior_kernels') and \
+     options.gps_prior_kernels is not None:
+    moo_prior_kernels_given = options.moo_gpb_prior_kernels \
+                              if hasattr(options, 'moo_gpb_prior_kernels') else None
+    if moo_prior_kernels_given is None:
+      moo_prior_kernels_given = [None] * len(options.gps_prior_kernels)
+    options.moo_gpb_prior_kernels = _get_gpb_prior_kernel_from_unproc(
+        options.gps_prior_kernels, moo_prior_kernels_given, config, prob,
+        converted_cp_to_euclidean)
   # Return options =======================================================================
   return options
 

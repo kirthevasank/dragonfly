@@ -1,5 +1,5 @@
 """
-  Prior mean functions used in the examples in this directory.
+  Prior mean functions and kernels used in the examples in this directory.
   -- kirthevasank
 """
 

@@ -3,6 +3,8 @@
   -- kirthevasank
 """
 
+# pylint: disable=invalid-name
+
 from moo_5d import compute_objectives as moo_objectives
 
 def objective(x):

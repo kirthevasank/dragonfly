@@ -773,18 +773,11 @@ class SpecifiedKernel(Kernel):
     self.kernel_func_hyperparams = kernel_func_hyperparams
     self._is_guaranteed_psd = is_guaranteed_psd
     self.kernel_func_is_vectorised = kernel_func_is_vectorised
-    # Check number of parameters
-    from inspect import signature
-    sig = signature(kernel_func)
-    self.num_args_for_kernel_func = len(sig.parameters)
-    if self.num_args_for_kernel_func == 2:
+    if self.kernel_func_hyperparams is None:
       self.kernel_func_to_pass = self.kernel_func
-    elif self.num_args_for_kernel_func == 3:
+    else:
       self.kernel_func_to_pass = lambda x1, x2: self.kernel_func(x1, x2,
                                      self.kernel_func_hyperparams)
-    else:
-      raise ValueError('Number of arguments for kernel_func should be 2 or 3. Given %d.'%(
-                       self.num_args_for_kernel_func))
 
   def is_guaranteed_psd(self):
     """ The child class should implement this method to indicate whether it is
@@ -811,6 +804,6 @@ class SpecifiedKernel(Kernel):
 
   def __str__(self):
     """ Return string representation. """
-    return 'UserSpecifiedKernel %s with hyperparams: %s.'%(
+    return 'SpecifiedKernel %s w/ hyperparams: %s.'%(
            str(self.kernel_func), self.kernel_func_hyperparams)
 

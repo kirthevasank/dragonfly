@@ -16,6 +16,7 @@ from itertools import product as itertools_product
 import sys
 import numpy as np
 # Local imports
+from .kernel import SpecifiedKernel
 from ..distributions.model import Model
 from ..distributions import continuous
 from ..distributions import discrete
@@ -69,6 +70,8 @@ mandatory_gp_args = [ \
                     'default kernel options for the domain.')),
   get_option_specs('kernel_func_hyperparam_configs', False, None,
                    'Configurations for the kernel hyperparameters.'),
+  get_option_specs('kernel_func_info', False, None,
+                   'Information/options for kernel_func.'),
   # GP noise variance
   get_option_specs('noise_var_type', False, 'tune', \
                    ('Specify how to obtain the noise variance. Should be tune, label or' +
@@ -352,7 +355,7 @@ class GPFitter(object):
     self._set_up_mean_and_noise_variance_bounds()
     # Set up hyper-parameters for the child.
     # -----------------------------------------------------------------------------
-    self._child_set_up_kernel()
+    self._set_up_kernel()
     self._hp_tune_method_set_up()
     self.cts_hp_bounds = np.array(self.cts_hp_bounds)
     # Some post child set up
@@ -362,10 +365,10 @@ class GPFitter(object):
       self._set_up_ml_hp_tune()
     if 'post_sampling' in self.methods_to_use:
       self._set_up_post_sampling_hp_tune()
-      self.num_hps = len(self.hp_priors) # The number of hyper parameters
+      self.num_hps = len(self.idx_to_hp_prior_dict) # The number of hyper parameters
     if 'post_mean' in self.methods_to_use:
       self._set_up_post_mean_hp_tune()
-      self.num_hps = len(self.hp_priors) # The number of hyper parameters
+      self.num_hps = len(self.idx_to_hp_prior_dict) # The number of hyper parameters
 
   def _hp_tune_method_set_up(self):
     """ Sets up probabilities for hp tune methods. """
@@ -433,18 +436,24 @@ class GPFitter(object):
     if hasattr(self.options, 'kernel_func') and self.options.kernel_func is not None:
       kf_hp_configs = [] if self.options.kernel_func_hyperparam_configs is None \
                       else self.options.kernel_func_hyperparam_configs
-      for hpc in kf_hp_configs:
+      self.kernel_func_hp_types = \
+        None if self.options.kernel_func_hyperparam_configs is None else []
+      for idx, hpc in enumerate(kf_hp_configs):
         if hpc[1] in ['cts', 'continuous', 'float', 'euclidean']:
-          self.param_order.append([hpc[0], 'cts'])
+          self.param_order.append(['%s_%d'%(hpc[0], idx), 'cts'])
           self.cts_hp_bounds.append(hpc[2])
-        elif hpc[2] in ['dscr', 'discrete']:
-          self.param_order.append([hpc[0], 'dscr'])
+          self.kernel_func_hp_types.append('cts')
+        elif hpc[1] in ['dscr', 'discrete']:
+          self.param_order.append(['%s_%d'%(hpc[0], idx), 'dscr'])
           self.dscr_hp_vals.append(hpc[2])
+          self.kernel_func_hp_types.append('dscr')
         else:
-          raise ValueError('Unrecognised option %s for parameter type. Please specify ' +
-                           'one of {cts, continuous, float, euclidean} for continuous ' +
-                           'kernel parameters and one of {dscr, discrete} for discrete' +
-                           ' parameters')
+          raise ValueError(('Unrecognised option %s for parameter type. Please specify ' +
+                            'one of {cts, continuous, float, euclidean} for continuous ' +
+                            'kernel parameters and one of {dscr, discrete} for discrete' +
+                            ' parameters')%(hpc[1]))
+      self.kernel_func_info = Namespace() if self.options.kernel_func_info is None else \
+                              self.options.kernel_func_info
     else:
       self._child_set_up_kernel()
 
@@ -507,24 +516,36 @@ class GPFitter(object):
 
   def _set_up_post_sampling_hp_tune(self):
     """ Sets up posterior sampling for tuning the parameters of the GP. """
+    # continuous parameters parameters
     if self.options.post_hp_tune_method == 'slice':
       self.hp_sampler_cts = lambda model, init_sample, num_samples, burn: \
                                model.draw_samples('slice', num_samples, init_sample, burn)
     elif self.options.post_hp_tune_method == 'nuts':
       self.hp_sampler_cts = lambda model, init_sample, num_samples, burn: \
                                 model.draw_samples('nuts', num_samples, init_sample, burn)
-
+    # discrete parameters
     self.hp_sampler_dscr = lambda model, init_sample, num_samples: \
                                 model.draw_samples('metropolis', num_samples, init_sample)
 
     # Priors for all the hyper parameters
-    self.hp_priors = []
-    for _, bounds in enumerate(self.cts_hp_bounds):
-      self.hp_priors.append(continuous.ContinuousUniform(bounds[0], bounds[-1]))
-
-    for _, vals in enumerate(self.dscr_hp_vals):
-      self.hp_priors.append(discrete.Categorical(vals, np.repeat(1.0/len(vals),
-                                                                 len(vals))))
+#     self.idx_to_hp_prior_dict = []
+#     self.cts_hp_priors = []
+#     self.dscr_hp_priors = []
+    # Set up priors for all the hyperparameters ------------------------------------------
+    self.idx_to_hp_prior_dict = {}
+    _cts_bounds_counter = 0
+    _dscr_vals_counter = 0
+    for (po_idx, param) in enumerate(self.param_order):
+      if param[1] == 'cts':
+        bounds = self.cts_hp_bounds[_cts_bounds_counter]
+        self.idx_to_hp_prior_dict[po_idx] = \
+          continuous.ContinuousUniform(bounds[0], bounds[-1])
+        _cts_bounds_counter += 1
+      else:
+        vals = self.dscr_hp_vals[_dscr_vals_counter]
+        self.idx_to_hp_prior_dict[po_idx] = \
+          discrete.Categorical(vals, np.repeat(1.0/len(vals), len(vals)))
+        _dscr_vals_counter += 1
 
   def _set_up_post_mean_hp_tune(self):
     """ Sets up using the posterior mean for tuning the parameters of the GP. """
@@ -568,8 +589,14 @@ class GPFitter(object):
       noise_var = self.options.noise_var_label * (self.Y.std() ** 2)
     else:
       noise_var = self.options.noise_var_value
-    ret_gp, ret_cts_hps, ret_dscr_hps = self._child_build_gp(mean_func, noise_var, \
-       gp_cts_hps, gp_dscr_hps, other_gp_params=other_gp_params, *args, **kwargs)
+    # Kernel --------------------------------------------
+    if hasattr(self.options, 'kernel_func') and self.options.kernel_func is not None:
+      # If kernel function is given
+      ret_gp, ret_cts_hps, ret_dscr_hps = self._build_gp_from_specified_kernel(
+        mean_func, noise_var, gp_cts_hps, gp_dscr_hps, *args, **kwargs)
+    else:
+      ret_gp, ret_cts_hps, ret_dscr_hps = self._child_build_gp(mean_func, noise_var, \
+         gp_cts_hps, gp_dscr_hps, other_gp_params=other_gp_params, *args, **kwargs)
     assert len(ret_cts_hps) == 0
     assert len(ret_dscr_hps) == 0
     return ret_gp
@@ -579,6 +606,29 @@ class GPFitter(object):
     """ A method which builds the child GP from the given gp_hyperparameters. Should be
         implemented in a child method. """
     raise NotImplementedError('Implement _child_build_gp in a child method.')
+
+  def _build_gp_from_specified_kernel(self, mean_func, noise_var, gp_cts_hps, gp_dscr_hps,
+                                      *args, **kwargs):
+    """ Build a GP with a specified kernel. """
+    if self.kernel_func_hp_types is None:
+      kernel_func_hyperparams = None
+    else:
+      kernel_func_hyperparams = []
+      for hp_type in self.kernel_func_hp_types:
+        if hp_type == 'cts':
+          curr_hp = gp_cts_hps[0]
+          gp_cts_hps = gp_cts_hps[1:]
+        elif hp_type == 'dscr':
+          curr_hp = gp_dscr_hps[0]
+          gp_dscr_hps = gp_dscr_hps[1:]
+        kernel_func_hyperparams.append(curr_hp)
+    is_guaranteed_psd = getattr(self.kernel_func_info, 'is_guaranteed_psd', True)
+    kernel_func_is_vectorised = getattr(self.kernel_func_info,
+                                        'kernel_func_is_vectorised', False)
+    spec_kernel = SpecifiedKernel(self.options.kernel_func, kernel_func_hyperparams,
+                                  is_guaranteed_psd, kernel_func_is_vectorised)
+    ret_gp = GP(self.X, self.Y, spec_kernel, mean_func, noise_var, *args, **kwargs)
+    return ret_gp, gp_cts_hps, gp_dscr_hps
 
   def _tuning_objective(self, gp_cts_hps, gp_dscr_hps, other_gp_params=None,
                         *args, **kwargs):
@@ -635,15 +685,20 @@ class GPFitter(object):
         groupings = [permut[i:i+self.group_size]
                      for i in range(0, self.add_dim, self.group_size)]
         self.other_gp_params = Namespace(add_gp_groupings=groupings)
-      elif type(self.hp_priors[self.curr_hp]).__name__ == "Categorical":
-        self.hps[self.curr_hp] = self.hp_priors[self.curr_hp].get_category(np.asscalar(x))
+      elif type(self.idx_to_hp_prior_dict[self.curr_hp]).__name__ == "Categorical":
+        self.hps[self.curr_hp] = \
+          self.idx_to_hp_prior_dict[self.curr_hp].get_category(np.asscalar(x))
       else:
         self.hps[self.curr_hp] = x
 
       lp = 0
-      for i, prior in enumerate(self.hp_priors):
-        if type(self.hp_priors[i]).__name__ == "Categorical":
-          lp += prior.logp(self.hp_priors[i].get_id(self.hps[i]))
+#       for i, prior in enumerate(self.idx_to_hp_prior_dict):
+      for i in self.idx_to_hp_prior_dict.keys():
+        prior = self.idx_to_hp_prior_dict[i]
+#         print(i, prior)
+        if type(prior).__name__ == "Categorical":
+          import pdb; pdb.set_trace()
+          lp += prior.logp(self.idx_to_hp_prior_dict[i].get_id(self.hps[i]))
         else:
           lp += prior.logp(self.hps[i])
       if not np.isfinite(lp):
@@ -662,10 +717,10 @@ class GPFitter(object):
 
     def _grad_logp(x):
       """ Computes gradient of log probability of observations at x. """
-      if not np.isfinite(self.hp_priors[self.curr_hp].logp(x)):
+      if not np.isfinite(self.idx_to_hp_prior_dict[self.curr_hp].logp(x)):
         return 0
       self.hps[self.curr_hp] = x
-      lp = self.hp_priors[self.curr_hp].grad_logp(self.hps[self.curr_hp])
+      lp = self.idx_to_hp_prior_dict[self.curr_hp].grad_logp(self.hps[self.curr_hp])
       lp += self._tuning_objective_post_sampling(self.hps[0:len(self.cts_hp_bounds)], \
                 self.hps[len(self.cts_hp_bounds):self.num_hps], self.other_gp_params, \
                 self.parameter, self.param_num, True)
@@ -690,13 +745,30 @@ class GPFitter(object):
     else:
       burn = self.options.post_hp_tune_burn
 
+    # determine indices for continuous and discrete hyperparameters
+    cts_idx_to_cidx = {}
+    dscr_idx_to_didx = {}
+    cts_counter = 0
+    dscr_counter = 0
+    for po_idx, po in enumerate(self.param_order):
+      if po[1] == 'cts':
+        cts_idx_to_cidx[po_idx] = cts_counter
+        cts_counter += 1
+      else:
+        dscr_idx_to_didx[po_idx] = dscr_counter
+        dscr_counter += 1
+#     print(cts_idx_to_cidx, dscr_idx_to_didx)
+#     print(self.param_order)
+
     # Initializing hyper parameters
-    for i in range(len(self.cts_hp_bounds)):
-      self.hps[i] = self.hp_priors[i].get_mean()
-    for i in range(len(self.cts_hp_bounds), self.num_hps):
-      self.hps[i] = self.hp_priors[i].draw_samples('random', 1)
-      if type(self.hp_priors[i]).__name__ == "Categorical":
-        self.hps[i] = self.hp_priors[i].get_category(int(self.hps[i]))
+    for cts_idx in cts_idx_to_cidx.keys():
+      glob_idx = cts_idx_to_cidx[cts_idx]
+#       print(cts_idx, glob_idx)
+      self.hps[glob_idx] = self.idx_to_hp_prior_dict[glob_idx].get_mean()
+    for dscr_idx in dscr_idx_to_didx.keys():
+      glob_idx = dscr_idx_to_didx[dscr_idx]
+#       print(dscr_idx, glob_idx)
+      self.hps[glob_idx] = self.idx_to_hp_prior_dict[glob_idx].draw_samples('random', 1)
 
     # Grouping intitialization for additive gp
     if vars(self.options).get('use_additive_gp', False) or \
@@ -717,23 +789,25 @@ class GPFitter(object):
     # Randomly selcting a parameter and sampling it using tuning objective
     order = list(range(self.num_hps))
     np.random.shuffle(order)
+    # Now iterate through each variable ---------------------------------------------
     for i in order:
       self.curr_hp = i
       self.parameter = self.param_order[i][0]
-      if self.parameter == "dim_bandwidths":
-        self.param_num = self.param_num + 1
-      dscr_i = i - len(self.cts_hp_bounds)
-      if self.param_order[i][-1] == "cts":
-        cts_hps[:, i] = np.squeeze(self.hp_sampler_cts(_model, self.hps[i],
-                                                       total_samples, burn), axis=1)
-        self.hps[i] = cts_hps[0, i]
+      cts_i = cts_idx_to_cidx[i] if self.param_order[i][1] == 'cts' else None
+      dscr_i = dscr_idx_to_didx[i] if self.param_order[i][1] == 'dscr' else None
+#       print('i in order..', i, cts_i, dscr_i, self.hps[i])
+#       print(self.hps)
+      if self.param_order[i][1] == "cts":
+        cts_hps[:, cts_i] = np.squeeze(self.hp_sampler_cts(_model, self.hps[i],
+                                       total_samples, burn), axis=1)
+        self.hps[i] = cts_hps[0, cts_i]
       elif self.parameter != "additive_grp":
-        if type(self.hp_priors[i]).__name__ == "Categorical":
-          init_sample = self.hp_priors[i].get_id(self.hps[i])
+        if type(self.idx_to_hp_prior_dict[i]).__name__ == "Categorical":
+          init_sample = self.idx_to_hp_prior_dict[i].get_id(self.hps[i])
           dscr_hp = np.squeeze(self.hp_sampler_dscr(_model, init_sample, total_samples),
                                axis=1)
           for j, val in enumerate(dscr_hp):
-            dscr_hps[j, dscr_i] = self.hp_priors[i].get_category(int(val))
+            dscr_hps[j, dscr_i] = self.idx_to_hp_prior_dict[i].get_category(int(val))
         else:
           dscr_hps[:, dscr_i] = np.squeeze(self.hp_sampler_dscr(_model, \
                                                 self.hps[i], total_samples), axis=1)
